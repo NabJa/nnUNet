@@ -361,7 +361,7 @@ class SegNet(SegmentationNetwork):
         x = self.conv_blocks_context[-1](x)
 
         for u in range(len(self.tu)):
-            x = self.tu[u](x, indicis[u])  # NJ Add index to nn.MaxUnpool3d()
+            x = self.tu[u](x, indicis[-(u + 1)])  # NJ Add index to nn.MaxUnpool3d()
             x = torch.cat((x, skips[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
             seg_outputs.append(self.final_nonlin(self.seg_outputs[u](x)))
@@ -433,3 +433,7 @@ class SegNet(SegmentationNetwork):
                 tmp += np.prod(map_size, dtype=np.int64) * num_classes
             # print(p, map_size, num_feat, tmp)
         return tmp
+
+
+if __name__ == "__main__":
+    segnet = SegNet()
