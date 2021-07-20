@@ -446,12 +446,3 @@ class SegNet(SegmentationNetwork):
                 tmp += np.prod(map_size, dtype=np.int64) * num_classes
             # print(p, map_size, num_feat, tmp)
         return tmp
-
-
-if __name__ == "__main__":
-    input_channels = 4
-    base_num_features = 32
-    num_classes = 4
-    num_pool = 5
-    segnet = SegNet(input_channels, base_num_features, num_classes, num_pool)
-
