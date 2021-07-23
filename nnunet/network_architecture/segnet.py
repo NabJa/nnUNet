@@ -8,7 +8,6 @@ from nnunet.network_architecture.neural_network import SegmentationNetwork
 import torch.nn.functional
 from nnunet.network_architecture.generic_UNet import (
     ConvDropoutNonlinNorm,
-    Generic_UNet,
     StackedConvLayers,
     Upsample,
 )
@@ -39,10 +38,10 @@ class SegNet(SegmentationNetwork):
         num_pool,
         num_conv_per_stage=2,
         feat_map_mul_on_downscale=2,
-        conv_op=nn.Conv2d,
-        norm_op=nn.BatchNorm2d,
+        conv_op=nn.Conv3d,
+        norm_op=nn.BatchNorm3d,
         norm_op_kwargs=None,
-        dropout_op=nn.Dropout2d,
+        dropout_op=nn.Dropout3d,
         dropout_op_kwargs=None,
         nonlin=nn.LeakyReLU,
         nonlin_kwargs=None,
@@ -68,7 +67,7 @@ class SegNet(SegmentationNetwork):
 
         Questions? -> f.isensee@dkfz.de
         """
-        super(Generic_UNet, self).__init__()
+        super(SegNet, self).__init__()
         self.convolutional_upsampling = convolutional_upsampling
         self.convolutional_pooling = convolutional_pooling
         self.upscale_logits = upscale_logits
@@ -97,7 +96,6 @@ class SegNet(SegmentationNetwork):
         if conv_op == nn.Conv2d:
             upsample_mode = "bilinear"
             pool_op = nn.MaxPool2d
-            transpconv = nn.ConvTranspose2d
             if pool_op_kernel_sizes is None:
                 pool_op_kernel_sizes = [(2, 2)] * num_pool
             if conv_kernel_sizes is None:
@@ -105,7 +103,6 @@ class SegNet(SegmentationNetwork):
         elif conv_op == nn.Conv3d:
             upsample_mode = "trilinear"
             pool_op = nn.MaxPool3d
-            transpconv = nn.ConvTranspose3d
             if pool_op_kernel_sizes is None:
                 pool_op_kernel_sizes = [(2, 2, 2)] * num_pool
             if conv_kernel_sizes is None:
@@ -135,22 +132,27 @@ class SegNet(SegmentationNetwork):
 
         self.conv_blocks_context = []
         self.conv_blocks_localization = []
-        self.td = []
-        self.tu = []
+        self.transpose_down = []
+        self.down_idx = []
+        self.transpose_up = []
         self.seg_outputs = []
 
         output_features = base_num_features
         input_features = input_channels
 
-        for d in range(num_pool):
+        #############################################
+        #                ENCODER                    #
+        #############################################
+
+        for npool in range(num_pool):
             # determine the first stride
-            if d != 0 and self.convolutional_pooling:
-                first_stride = pool_op_kernel_sizes[d - 1]
+            if npool != 0 and self.convolutional_pooling:
+                first_stride = pool_op_kernel_sizes[npool - 1]
             else:
                 first_stride = None
 
-            self.conv_kwargs["kernel_size"] = self.conv_kernel_sizes[d]
-            self.conv_kwargs["padding"] = self.conv_pad_sizes[d]
+            self.conv_kwargs["kernel_size"] = self.conv_kernel_sizes[npool]
+            self.conv_kwargs["padding"] = self.conv_pad_sizes[npool]
             # add convolutions
             self.conv_blocks_context.append(
                 StackedConvLayers(
@@ -171,13 +173,17 @@ class SegNet(SegmentationNetwork):
             )
             if not self.convolutional_pooling:
                 # NJ CHANGE 1: SET RETURN_INDICES TO TRUE POOL_OP (=nn.MaxPool3d)
-                self.td.append(pool_op(pool_op_kernel_sizes[d], return_indices=True))
+                tdown = pool_op(pool_op_kernel_sizes[npool], return_indices=True)
+                self.transpose_down.append(tdown)
             input_features = output_features
             output_features = int(np.round(output_features * feat_map_mul_on_downscale))
 
             output_features = min(output_features, self.max_num_features)
 
-        # now the bottleneck.
+        #############################################
+        #                BOTTLENECK                 #
+        #############################################
+
         # determine the first stride
         if self.convolutional_pooling:
             first_stride = pool_op_kernel_sizes[-1]
@@ -233,19 +239,24 @@ class SegNet(SegmentationNetwork):
             old_dropout_p = self.dropout_op_kwargs["p"]
             self.dropout_op_kwargs["p"] = 0.0
 
-        # now lets build the localization pathway
-        for u in range(num_pool):
+        #############################################
+        #                DECODER                    #
+        #############################################
+
+        for npool in range(num_pool):
             nfeatures_from_down = final_num_features
             nfeatures_from_skip = self.conv_blocks_context[
-                -(2 + u)
+                -(2 + npool)
             ].output_channels  # self.conv_blocks_context[-1] is bottleneck, so start with -2
             n_features_after_tu_and_concat = nfeatures_from_skip * 2
 
             # the first conv reduces the number of features to match those of skip
             # the following convs work on that number of features
             # if not convolutional upsampling then the final conv reduces the num of features again
-            if u != num_pool - 1 and not self.convolutional_upsampling:
-                final_num_features = self.conv_blocks_context[-(3 + u)].output_channels
+            if npool != num_pool - 1 and not self.convolutional_upsampling:
+                final_num_features = self.conv_blocks_context[
+                    -(3 + npool)
+                ].output_channels
             else:
                 final_num_features = nfeatures_from_skip
 
@@ -254,12 +265,12 @@ class SegNet(SegmentationNetwork):
             ############
 
             # if not self.convolutional_upsampling:
-            #     self.tu.append(Upsample(scale_factor=pool_op_kernel_sizes[-(u + 1)], mode=upsample_mode))
+            #     self.transpose_up.append(Upsample(scale_factor=pool_op_kernel_sizes[-(u + 1)], mode=upsample_mode))
             # else:
-            #     self.tu.append(transpconv(nfeatures_from_down, nfeatures_from_skip, pool_op_kernel_sizes[-(u + 1)],
+            #     self.transpose_up.append(transpconv(nfeatures_from_down, nfeatures_from_skip, pool_op_kernel_sizes[-(u + 1)],
             #                               pool_op_kernel_sizes[-(u + 1)], bias=False))
-            this_pool_op_kernel_size = pool_op_kernel_sizes[-(u + 1)]
-            self.tu.append(
+            this_pool_op_kernel_size = pool_op_kernel_sizes[-(npool + 1)]
+            self.transpose_up.append(
                 nn.MaxUnpool3d(this_pool_op_kernel_size, this_pool_op_kernel_size)
             )
 
@@ -267,8 +278,8 @@ class SegNet(SegmentationNetwork):
             # END CHANGE 2
             ############
 
-            self.conv_kwargs["kernel_size"] = self.conv_kernel_sizes[-(u + 1)]
-            self.conv_kwargs["padding"] = self.conv_pad_sizes[-(u + 1)]
+            self.conv_kwargs["kernel_size"] = self.conv_kernel_sizes[-(npool + 1)]
+            self.conv_kwargs["padding"] = self.conv_pad_sizes[-(npool + 1)]
             self.conv_blocks_localization.append(
                 nn.Sequential(
                     StackedConvLayers(
@@ -335,8 +346,8 @@ class SegNet(SegmentationNetwork):
         # register all modules properly
         self.conv_blocks_localization = nn.ModuleList(self.conv_blocks_localization)
         self.conv_blocks_context = nn.ModuleList(self.conv_blocks_context)
-        self.td = nn.ModuleList(self.td)
-        self.tu = nn.ModuleList(self.tu)
+        self.transpose_down = nn.ModuleList(self.transpose_down)
+        self.transpose_up = nn.ModuleList(self.transpose_up)
         self.seg_outputs = nn.ModuleList(self.seg_outputs)
         if self.upscale_logits:
             self.upscale_logits_ops = nn.ModuleList(
@@ -355,13 +366,15 @@ class SegNet(SegmentationNetwork):
             x = self.conv_blocks_context[d](x)
             skips.append(x)
             if not self.convolutional_pooling:
-                x, index = self.td[d](x)
+                x, index = self.transpose_down[d](x)
                 indicis.append(index)  # NJ Save indeces for every pooling step
 
         x = self.conv_blocks_context[-1](x)
 
-        for u in range(len(self.tu)):
-            x = self.tu[u](x, indicis[-(u + 1)])  # NJ Add index to nn.MaxUnpool3d()
+        for u in range(len(self.transpose_up)):
+            x = self.transpose_up[u](
+                x, indicis[-(u + 1)]
+            )  # NJ Add index to nn.MaxUnpool3d()
             x = torch.cat((x, skips[-(u + 1)]), dim=1)
             x = self.conv_blocks_localization[u](x)
             seg_outputs.append(self.final_nonlin(self.seg_outputs[u](x)))
