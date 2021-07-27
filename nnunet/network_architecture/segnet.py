@@ -448,7 +448,6 @@ class SegNet(SegmentationNetwork):
         return tmp
 
 
-
 class SmallSegNet(SegmentationNetwork):
     DEFAULT_BATCH_SIZE_3D = 2
     DEFAULT_PATCH_SIZE_3D = (64, 192, 160)
@@ -718,20 +717,20 @@ class SmallSegNet(SegmentationNetwork):
             self.conv_kwargs["padding"] = self.conv_pad_sizes[-(npool + 1)]
             ######## NJ SmallResNet uses only nfeatures_from_skip
             self.conv_blocks_localization.append(
-                    StackedConvLayers(
-                        nfeatures_from_skip,
-                        final_num_features,
-                        1,
-                        self.conv_op,
-                        self.conv_kwargs,
-                        self.norm_op,
-                        self.norm_op_kwargs,
-                        self.dropout_op,
-                        self.dropout_op_kwargs,
-                        self.nonlin,
-                        self.nonlin_kwargs,
-                        basic_block=basic_block,
-                    ),
+                StackedConvLayers(
+                    nfeatures_from_skip,
+                    final_num_features,
+                    1,
+                    self.conv_op,
+                    self.conv_kwargs,
+                    self.norm_op,
+                    self.norm_op_kwargs,
+                    self.dropout_op,
+                    self.dropout_op_kwargs,
+                    self.nonlin,
+                    self.nonlin_kwargs,
+                    basic_block=basic_block,
+                ),
             )
 
         for ds in range(len(self.conv_blocks_localization)):
@@ -866,5 +865,4 @@ class SmallSegNet(SegmentationNetwork):
                 tmp += np.prod(map_size, dtype=np.int64) * num_classes
             # print(p, map_size, num_feat, tmp)
         return tmp
-
 
