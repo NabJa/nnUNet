@@ -349,7 +349,7 @@ class SegPerformer(SegmentationNetwork):
 
         for u in range(len(self.tu)):
             skip = skips[-(u + 1)]
-            if self.mhcas:
+            if self.mhcas and u in [0, 1, 2, 3]:
                 x = self.mhcas[u](skip, x)
             else:
                 x = self.tu[u](x)
