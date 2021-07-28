@@ -36,6 +36,65 @@ class MHSA(nn.Module):
         return x.view(self.shape)
 
 
+class MHCA(nn.Module):
+    def __init__(self, skip_dim, latent_dim):
+        super().__init__()
+        self.skip_dim = skip_dim
+        self.latent_dim = latent_dim
+
+        self.skip1x1 = nn.Sequential(
+            nn.Conv3d(skip_dim, skip_dim, kernel_size=1, stride=1),
+            nn.BatchNorm3d(skip_dim),
+            nn.ReLU(inplace=True)
+        )
+
+        self.latent1x1 = nn.Sequential(
+            nn.Conv3d(latent_dim, skip_dim, kernel_size=1, stride=1),
+            nn.BatchNorm3d(skip_dim),
+            nn.ReLU(inplace=True) 
+        )
+
+        self.attention = CrossAttention(skip_dim)
+
+        self.up1x1 = nn.Sequential(
+            nn.Conv3d(skip_dim, skip_dim, kernel_size=1, stride=1),
+            nn.BatchNorm3d(skip_dim),
+            nn.Sigmoid(),
+            nn.Upsample(scale_factor=2)
+        )
+
+    def forward(self, skip, latent):
+        skip = self.skip1x1(skip)
+        latent = self.latent1x1(latent)
+
+        skip_enc = self.encode_skip(skip)
+        latent = self.encode_latent(latent)
+
+        out = self.attention(latent, context=skip_enc)
+        out = self.decode_latent(out)
+
+        if out.shape[2:] != skip.shape[2:]:
+            out = self.up1x1(out)
+               
+        return skip * out
+    
+    
+    def encode_skip(self, raw):
+        self.skip_shape = raw.shape
+        bs, c, h, w, d = self.skip_shape
+        return raw.view(bs, h*w*d, c)
+
+    def decode_skip(self, enc):
+        return enc.view(self.skip_shape)
+
+    def encode_latent(self, raw):
+        self.latent_shape = raw.shape
+        bs, c, h, w, d = self.latent_shape
+        return raw.view(bs, h*w*d, c)
+
+    def decode_latent(self, enc):
+        return enc.view(self.latent_shape)
+
 class SegPerformer(SegmentationNetwork):
     DEFAULT_BATCH_SIZE_3D = 2111
     DEFAULT_PATCH_SIZE_3D = (64, 192, 160)
@@ -141,6 +200,7 @@ class SegPerformer(SegmentationNetwork):
         self.td = []
         self.tu = []
         self.seg_outputs = []
+        self.mhcas = []
 
         output_features = base_num_features
         input_features = input_channels
@@ -214,6 +274,9 @@ class SegPerformer(SegmentationNetwork):
                 -(2 + u)].output_channels  # self.conv_blocks_context[-1] is bottleneck, so start with -2
             n_features_after_tu_and_concat = nfeatures_from_skip * 2
 
+            if self.mhca:
+                self.mhcas.append(MHCA(nfeatures_from_skip, nfeatures_from_down))
+
             # the first conv reduces the number of features to match those of skip
             # the following convs work on that number of features
             # if not convolutional upsampling then the final conv reduces the num of features again
@@ -261,6 +324,7 @@ class SegPerformer(SegmentationNetwork):
         self.td = nn.ModuleList(self.td)
         self.tu = nn.ModuleList(self.tu)
         self.seg_outputs = nn.ModuleList(self.seg_outputs)
+        self.mhcas = nn.ModuleList(self.mhcas)
         if self.upscale_logits:
             self.upscale_logits_ops = nn.ModuleList(
                 self.upscale_logits_ops)  # lambda x:x is not a Module so we need to distinguish here
@@ -284,8 +348,12 @@ class SegPerformer(SegmentationNetwork):
             x = self.performer_self_attention(x)
 
         for u in range(len(self.tu)):
-            x = self.tu[u](x)
-            x = torch.cat((x, skips[-(u + 1)]), dim=1)
+            skip = skips[-(u + 1)]
+            if self.mhcas:
+                x = self.mhcas[u](skip, x)
+            else:
+                x = self.tu[u](x)
+            x = torch.cat((x, skip), dim=1)
             x = self.conv_blocks_localization[u](x)
             seg_outputs.append(self.final_nonlin(self.seg_outputs[u](x)))
 
@@ -334,4 +402,4 @@ class SegPerformer(SegmentationNetwork):
             if deep_supervision and p < (npool - 2):
                 tmp += np.prod(map_size, dtype=np.int64) * num_classes
             # print(p, map_size, num_feat, tmp)
-        return tmp
+        return tmp  
