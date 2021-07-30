@@ -146,7 +146,7 @@ class StackedConvLayers(nn.Module):
         if self.residual:
             residual = self.residual(x)
             out = self.blocks(x)
-            out += residual
+            out = torch.add(out, residual)
         else:
             out = self.blocks(x)
         return out
