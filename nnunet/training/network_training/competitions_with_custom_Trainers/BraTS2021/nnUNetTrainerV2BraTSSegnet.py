@@ -6,6 +6,10 @@ from nnunet.network_architecture.segnet import SegNet, SmallSegNet
 from nnunet.training.network_training.competitions_with_custom_Trainers.BraTS2020.nnUNetTrainerV2BraTSRegions import (
     nnUNetTrainerV2BraTSRegions,
 )
+from nnunet.training.network_training.nnUNet_variants.loss_function.nnUNetTrainerV2_focalLoss import (
+    FocalLossMultiClass,
+)
+from nnunet.training.loss_functions.dice_loss import Tversky_and_CE_loss
 
 
 class nnUNetTrainerV2BraTSSegnet(nnUNetTrainerV2BraTSRegions):
@@ -186,3 +190,40 @@ class nnUNetTrainerV2BraTSSmallSegnet(nnUNetTrainerV2BraTSRegions):
 
         # NJ Set inference_apply_nonlin as in nnUNetTrainerV2BraTSRegions
         self.network.inference_apply_nonlin = nn.Sigmoid()
+
+
+class nnUNetTrainerV2SegnetFocal(nnUNetTrainerV2BraTSSegnet):
+    def __init__(self, plans_file, fold, output_folder=None, dataset_directory=None, batch_dice=True, stage=None,
+                 unpack_data=True, deterministic=True, fp16=False):
+        super().__init__(plans_file, fold, output_folder, dataset_directory, batch_dice, stage, unpack_data,
+                         deterministic, fp16)
+        self.loss = FocalLossMultiClass()
+
+
+class nnUNetTrainerV2SegNetTversky(nnUNetTrainerV2BraTSSegnet):
+    def __init__(
+        self,
+        plans_file,
+        fold,
+        output_folder,
+        dataset_directory,
+        batch_dice,
+        stage,
+        unpack_data,
+        deterministic,
+        fp16,
+    ):
+        super(nnUNetTrainerV2SegNetTversky, self).__init__(
+            plans_file,
+            fold,
+            output_folder=output_folder,
+            dataset_directory=dataset_directory,
+            batch_dice=batch_dice,
+            stage=stage,
+            unpack_data=unpack_data,
+            deterministic=deterministic,
+            fp16=fp16,
+        )
+        self.loss = Tversky_and_CE_loss(
+            {"batch": self.batch_dice, "smooth": 1e-5, "do_bg": False}, {}
+        )

@@ -14,17 +14,25 @@
 
 
 import torch
+from torch import nn, Tensor
+import numpy as np
+
 from nnunet.training.loss_functions.TopK_loss import TopKLoss
 from nnunet.training.loss_functions.crossentropy import RobustCrossEntropyLoss
 from nnunet.utilities.nd_softmax import softmax_helper
 from nnunet.utilities.tensor_utilities import sum_tensor
-from torch import nn
-import numpy as np
 
 
 class GDL(nn.Module):
-    def __init__(self, apply_nonlin=None, batch_dice=False, do_bg=True, smooth=1.,
-                 square=False, square_volumes=False):
+    def __init__(
+        self,
+        apply_nonlin=None,
+        batch_dice=False,
+        do_bg=True,
+        smooth=1.0,
+        square=False,
+        square_volumes=False,
+    ):
         """
         square_volumes will square the weight term. The paper recommends square_volumes=True; I don't (just an intuition)
         """
@@ -69,7 +77,9 @@ class GDL(nn.Module):
         tp, fp, fn, _ = get_tp_fp_fn_tn(x, y_onehot, axes, loss_mask, self.square)
 
         # GDL weight computation, we use 1/V
-        volumes = sum_tensor(y_onehot, axes) + 1e-6 # add some eps to prevent div by zero
+        volumes = (
+            sum_tensor(y_onehot, axes) + 1e-6
+        )  # add some eps to prevent div by zero
 
         if self.square_volumes:
             volumes = volumes ** 2
@@ -135,10 +145,18 @@ def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
     tn = (1 - net_output) * (1 - y_onehot)
 
     if mask is not None:
-        tp = torch.stack(tuple(x_i * mask[:, 0] for x_i in torch.unbind(tp, dim=1)), dim=1)
-        fp = torch.stack(tuple(x_i * mask[:, 0] for x_i in torch.unbind(fp, dim=1)), dim=1)
-        fn = torch.stack(tuple(x_i * mask[:, 0] for x_i in torch.unbind(fn, dim=1)), dim=1)
-        tn = torch.stack(tuple(x_i * mask[:, 0] for x_i in torch.unbind(tn, dim=1)), dim=1)
+        tp = torch.stack(
+            tuple(x_i * mask[:, 0] for x_i in torch.unbind(tp, dim=1)), dim=1
+        )
+        fp = torch.stack(
+            tuple(x_i * mask[:, 0] for x_i in torch.unbind(fp, dim=1)), dim=1
+        )
+        fn = torch.stack(
+            tuple(x_i * mask[:, 0] for x_i in torch.unbind(fn, dim=1)), dim=1
+        )
+        tn = torch.stack(
+            tuple(x_i * mask[:, 0] for x_i in torch.unbind(tn, dim=1)), dim=1
+        )
 
     if square:
         tp = tp ** 2
@@ -156,7 +174,7 @@ def get_tp_fp_fn_tn(net_output, gt, axes=None, mask=None, square=False):
 
 
 class SoftDiceLoss(nn.Module):
-    def __init__(self, apply_nonlin=None, batch_dice=False, do_bg=True, smooth=1.):
+    def __init__(self, apply_nonlin=None, batch_dice=False, do_bg=True, smooth=1.0):
         """
         """
         super(SoftDiceLoss, self).__init__()
@@ -228,7 +246,9 @@ class MCCLoss(nn.Module):
         tn /= voxels
 
         nominator = tp * tn - fp * fn + self.smooth
-        denominator = ((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)) ** 0.5 + self.smooth
+        denominator = (
+            (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
+        ) ** 0.5 + self.smooth
 
         mcc = nominator / denominator
 
@@ -243,7 +263,7 @@ class MCCLoss(nn.Module):
 
 
 class SoftDiceLossSquared(nn.Module):
-    def __init__(self, apply_nonlin=None, batch_dice=False, do_bg=True, smooth=1.):
+    def __init__(self, apply_nonlin=None, batch_dice=False, do_bg=True, smooth=1.0):
         """
         squares the terms in the denominator as proposed by Milletari et al.
         """
@@ -302,8 +322,17 @@ class SoftDiceLossSquared(nn.Module):
 
 
 class DC_and_CE_loss(nn.Module):
-    def __init__(self, soft_dice_kwargs, ce_kwargs, aggregate="sum", square_dice=False, weight_ce=1, weight_dice=1,
-                 log_dice=False, ignore_label=None):
+    def __init__(
+        self,
+        soft_dice_kwargs,
+        ce_kwargs,
+        aggregate="sum",
+        square_dice=False,
+        weight_ce=1,
+        weight_dice=1,
+        log_dice=False,
+        ignore_label=None,
+    ):
         """
         CAREFUL. Weights for CE and Dice do not need to sum to one. You can set whatever you want.
         :param soft_dice_kwargs:
@@ -315,8 +344,8 @@ class DC_and_CE_loss(nn.Module):
         """
         super(DC_and_CE_loss, self).__init__()
         if ignore_label is not None:
-            assert not square_dice, 'not implemented'
-            ce_kwargs['reduction'] = 'none'
+            assert not square_dice, "not implemented"
+            ce_kwargs["reduction"] = "none"
         self.log_dice = log_dice
         self.weight_dice = weight_dice
         self.weight_ce = weight_ce
@@ -328,7 +357,9 @@ class DC_and_CE_loss(nn.Module):
         if not square_dice:
             self.dc = SoftDiceLoss(apply_nonlin=softmax_helper, **soft_dice_kwargs)
         else:
-            self.dc = SoftDiceLossSquared(apply_nonlin=softmax_helper, **soft_dice_kwargs)
+            self.dc = SoftDiceLossSquared(
+                apply_nonlin=softmax_helper, **soft_dice_kwargs
+            )
 
     def forward(self, net_output, target):
         """
@@ -338,14 +369,16 @@ class DC_and_CE_loss(nn.Module):
         :return:
         """
         if self.ignore_label is not None:
-            assert target.shape[1] == 1, 'not implemented for one hot encoding'
+            assert target.shape[1] == 1, "not implemented for one hot encoding"
             mask = target != self.ignore_label
             target[~mask] = 0
             mask = mask.float()
         else:
             mask = None
 
-        dc_loss = self.dc(net_output, target, loss_mask=mask) if self.weight_dice != 0 else 0
+        dc_loss = (
+            self.dc(net_output, target, loss_mask=mask) if self.weight_dice != 0 else 0
+        )
         if self.log_dice:
             dc_loss = -torch.log(-dc_loss)
 
@@ -357,7 +390,7 @@ class DC_and_CE_loss(nn.Module):
         if self.aggregate == "sum":
             result = self.weight_ce * ce_loss + self.weight_dice * dc_loss
         else:
-            raise NotImplementedError("nah son") # reserved for other stuff (later)
+            raise NotImplementedError("nah son")  # reserved for other stuff (later)
         return result
 
 
@@ -384,7 +417,7 @@ class DC_and_BCE_loss(nn.Module):
         if self.aggregate == "sum":
             result = ce_loss + dc_loss
         else:
-            raise NotImplementedError("nah son") # reserved for other stuff (later)
+            raise NotImplementedError("nah son")  # reserved for other stuff (later)
 
         return result
 
@@ -402,7 +435,7 @@ class GDL_and_CE_loss(nn.Module):
         if self.aggregate == "sum":
             result = ce_loss + dc_loss
         else:
-            raise NotImplementedError("nah son") # reserved for other stuff (later)
+            raise NotImplementedError("nah son")  # reserved for other stuff (later)
         return result
 
 
@@ -414,7 +447,9 @@ class DC_and_topk_loss(nn.Module):
         if not square_dice:
             self.dc = SoftDiceLoss(apply_nonlin=softmax_helper, **soft_dice_kwargs)
         else:
-            self.dc = SoftDiceLossSquared(apply_nonlin=softmax_helper, **soft_dice_kwargs)
+            self.dc = SoftDiceLossSquared(
+                apply_nonlin=softmax_helper, **soft_dice_kwargs
+            )
 
     def forward(self, net_output, target):
         dc_loss = self.dc(net_output, target)
@@ -422,5 +457,106 @@ class DC_and_topk_loss(nn.Module):
         if self.aggregate == "sum":
             result = ce_loss + dc_loss
         else:
-            raise NotImplementedError("nah son") # reserved for other stuff (later?)
+            raise NotImplementedError("nah son")  # reserved for other stuff (later?)
+        return result
+
+
+
+class TverskyLoss(nn.Module):
+    def __init__(self, alpha=0.3, beta=0.7, apply_nonlin=None, batch=False, do_bg=True, smooth=1.0):
+        """
+        """
+        super(TverskyLoss, self).__init__()
+        self.alpha = alpha
+        self.beta = beta
+
+        self.do_bg = do_bg
+        self.batch = batch
+        self.apply_nonlin = apply_nonlin
+        self.smooth = smooth
+
+    def forward(self, x, y, loss_mask=None):
+        shp_x = x.shape
+
+        if self.batch:
+            axes = [0] + list(range(2, len(shp_x)))
+        else:
+            axes = list(range(2, len(shp_x)))
+
+        if self.apply_nonlin is not None:
+            x = self.apply_nonlin(x)
+
+        tp, fp, fn, _ = get_tp_fp_fn_tn(x, y, axes, loss_mask, False)
+
+        tversky = tp / (tp + self.alpha * fn + self.beta * fp + self.smooth)
+
+        if not self.do_bg:
+            if self.batch:
+                tversky = tversky[1:]
+            else:
+                tversky = tversky[:, 1:]
+        tversky = tversky.mean()
+
+        return -tversky
+
+
+
+class Tversky_and_CE_loss(nn.Module):
+    def __init__(
+        self,
+        tversky_kwargs,
+        ce_kwargs,
+        aggregate="sum",
+        weight_ce=1,
+        weight_tversky=1,
+        ignore_label=None,
+    ):
+        """
+        CAREFUL. Weights for CE and Dice do not need to sum to one. You can set whatever you want.
+        :param soft_dice_kwargs:
+        :param ce_kwargs:
+        :param aggregate:
+        :param square_dice:
+        :param weight_ce:
+        :param weight_dice:
+        """
+        super(Tversky_and_CE_loss, self).__init__()
+        if ignore_label is not None:
+            ce_kwargs["reduction"] = "none"
+        self.weight_tversky = weight_tversky
+        self.weight_ce = weight_ce
+        self.aggregate = aggregate
+        self.ignore_label = ignore_label
+
+        self.ce = RobustCrossEntropyLoss(**ce_kwargs)
+        self.tversky = TverskyLoss(apply_nonlin=softmax_helper, **tversky_kwargs)
+
+    def forward(self, net_output: Tensor, target: Tensor) -> Tensor:
+        """
+        target must be b, c, x, y(, z) with c=1
+        :param net_output:
+        :param target:
+        :return:
+        """
+        if self.ignore_label is not None:
+            assert target.shape[1] == 1, "not implemented for one hot encoding"
+            mask = target != self.ignore_label
+            target[~mask] = 0
+            mask = mask.float()
+        else:
+            mask = None
+
+        tversky = (
+            self.tversky(net_output, target, loss_mask=mask) if self.weight_tversky != 0 else 0
+        )
+
+        ce_loss = self.ce(net_output, target[:, 0].long()) if self.weight_ce != 0 else 0
+        if self.ignore_label is not None:
+            ce_loss *= mask[:, 0]
+            ce_loss = ce_loss.sum() / mask.sum()
+
+        if self.aggregate == "sum":
+            result = self.weight_ce * ce_loss + self.weight_tversky * tversky
+        else:
+            raise NotImplementedError("nah son")  # reserved for other stuff (later)
         return result
