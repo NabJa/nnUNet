@@ -14,6 +14,7 @@
 
 
 from copy import deepcopy
+from typing import Tuple
 from nnunet.utilities.nd_softmax import softmax_helper
 from torch import nn
 import torch
@@ -83,6 +84,64 @@ class ConvDropoutNormNonlin(nn.Module):
         if self.dropout is not None:
             x = self.dropout(x)
         return self.lrelu(self.instnorm(x))
+
+
+class Squeeze_and_excitation_path(nn.Module):
+    """
+    Path can be used on Squeeze-and-excitation blocks to give a kind of attention mechanism for feature maps.
+    Reference: Hu, Jie, Li Shen, and Gang Sun. 'Squeeze-and-excitation networks.'
+    """
+
+    def __init__(self, feature_shape: Tuple[int], squeeze: int = 2):
+        """
+        Args:
+            feature_shape: Input feature map shape (BATCHSIZE, CHANNELS, DEPTH, HEIGHT, WIDTH), where DEPTH is optional.
+            squeeze: Reduction ratio in for Squeeze operation. In reference termed 'r'.
+        """
+        super(Squeeze_and_excitation_path, self).__init__()
+
+        # Parse input feature shape
+        _, C, *vol = feature_shape
+        self.dim = len(vol)
+        assert self.dim in (
+            2,
+            3,
+        ), f"Unexpected feature shape. Support only for 2D and 3D. Given dimensionality (={self.dim}) should be 2 or 3."
+
+        # Global pooling
+        self.determine_pool_operation(vol)
+
+        # SE block
+        self.se = nn.Sequential(
+            # Squeeze
+            nn.Linear(C, C // squeeze),
+            nn.ReLU(inplace=True),
+            # Excite
+            nn.Linear(C // squeeze, C),
+            nn.Sigmoid(),
+        )
+
+        self.determine_unsqueeze()
+
+    def forward(self, x):
+        x = self.pool_op(x)
+        x = torch.flatten(x, start_dim=1)
+        x = self.se(x)
+        return self.unsqueeze(x)
+
+    def determine_unsqueeze(self):
+        """Unsqueze final output to match BS, C, 1, 1, (optional 1)"""
+        if self.dim == 3:
+            self.unsqueeze = lambda x: x[:, :, None, None, None]
+        else:
+            self.unsqueeze = lambda x: x[:, :, None, None]
+
+    def determine_pool_operation(self, shape):
+        """Pooling operation on complete input without stride."""
+        if self.dim == 3:
+            self.pool_op = nn.AvgPool3d(shape, stride=None)
+        else:
+            self.pool_op = nn.AvgPool2d(shape, stride=None)
 
 
 class ConvDropoutNonlinNorm(ConvDropoutNormNonlin):
