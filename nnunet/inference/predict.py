@@ -12,7 +12,8 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-
+from pathlib import Path
+from time import time
 import argparse
 from copy import deepcopy
 from typing import Tuple, Union, List
@@ -764,6 +765,8 @@ if __name__ == "__main__":
                         help='Predictions are done with mixed precision by default. This improves speed and reduces '
                              'the required vram. If you want to disable mixed precision you can set this flag. Note '
                              'that yhis is not recommended (mixed precision is ~2x faster!)')
+    
+    tic = time()
 
     args = parser.parse_args()
     input_folder = args.input_folder
@@ -831,7 +834,19 @@ if __name__ == "__main__":
     elif all_in_gpu == "False":
         all_in_gpu = False
 
+    start_pred = time()
     predict_from_folder(model, input_folder, output_folder, folds, save_npz, num_threads_preprocessing,
                         num_threads_nifti_save, lowres_segmentations, part_id, num_parts, tta,
                         mixed_precision=not args.disable_mixed_precision,
                         overwrite_existing=overwrite, mode=mode, overwrite_all_in_gpu=all_in_gpu, step_size=step_size)
+    end_pred = time()
+    tac = time()
+
+    time_log = Path(output_folder) / "time_log.txt"
+
+    total_time = tac - tic
+    pred_time = end_pred - start_pred
+
+    with time_log.open(mode="w+") as log:
+        log.write(f"Total script time:\t{total_time:5f} seconds => {total_time / 60:5f} minutes.\n")
+        log.write(f"Total pred time:\t{pred_time:5f} seconds => {pred_time / 60:5f} minutes.\n")
