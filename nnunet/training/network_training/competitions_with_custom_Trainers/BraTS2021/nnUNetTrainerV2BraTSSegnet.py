@@ -2,7 +2,7 @@ from typing import Optional
 import torch
 from torch import nn
 from nnunet.network_architecture.initialization import InitWeights_He
-from nnunet.network_architecture.segnet import SegNet, SmallSegNet
+from nnunet.network_architecture.segnet import SegNet, SmallSegNet, SegNetNPool
 from nnunet.training.network_training.competitions_with_custom_Trainers.BraTS2020.nnUNetTrainerV2BraTSRegions import (
     nnUNetTrainerV2BraTSRegions,
 )
@@ -18,6 +18,11 @@ from nnunet.training.data_augmentation.data_augmentation_moreDA import (
 )
 from nnunet.training.loss_functions.deep_supervision import MultipleOutputLoss2
 from nnunet.network_architecture.neural_network import SegmentationNetwork
+
+
+#####
+# Basic Segnet Classes
+#####
 
 
 class nnUNetTrainerV2BraTSSegnet(nnUNetTrainerV2BraTSRegions):
@@ -204,6 +209,11 @@ class nnUNetTrainerV2BraTSSmallSegnet(nnUNetTrainerV2BraTSRegions):
 
         # NJ Set inference_apply_nonlin as in nnUNetTrainerV2BraTSRegions
         self.network.inference_apply_nonlin = nn.Sigmoid()
+
+
+#####
+# Classes with different loss
+#####
 
 
 class nnUNetTrainerV2SegnetFocal(nnUNetTrainerV2BraTSSegnet):
@@ -554,3 +564,302 @@ class nnUNetTrainerSegNetPool6Conv4(nnUNetTrainerSegNetCustomSize):
             grid_num_conv_per_stage=grid_num_conv_per_stage,
             grid_num_pool=grid_num_pool,
         )
+
+
+#####
+# Classes with limited number of unpooling.
+# Unpooling only in high resolution layers for better performance on small classes.
+# Idea: Small classes benifit more from latent space. Therefore transposed convolutions are useful.
+# On large classes unpooling enables more precise segmentation.
+#####
+
+
+class nnUNetTrainerSegNetPool4(nnUNetTrainerV2BraTSRegions):
+    """
+    SegNet trainer class. Implements training procedure using SegNet instead of generic UNet.
+
+    Train model with:
+    nnUNet_train 3d_fullres nnUNetTrainerV2BraTSSegnet Task500_Brats21 4 --npz
+    """
+
+    def __init__(
+        self,
+        plans_file,
+        fold,
+        output_folder,
+        dataset_directory,
+        batch_dice,
+        stage,
+        unpack_data,
+        deterministic,
+        fp16,
+        grid_num_conv_per_stage: Optional[int] = None,  # Grid: Number of convolutions
+        grid_num_pool: Optional[int] = None,  # Grid: Number of poolings
+    ):
+        super().__init__(
+            plans_file,
+            fold,
+            output_folder=output_folder,
+            dataset_directory=dataset_directory,
+            batch_dice=batch_dice,
+            stage=stage,
+            unpack_data=unpack_data,
+            deterministic=deterministic,
+            fp16=fp16,
+        )
+        self.grid_num_conv_per_stage = grid_num_conv_per_stage
+        self.grid_num_pool = grid_num_pool
+
+    def initialize_network(self):
+        """
+        - momentum 0.99
+        - SGD instead of Adam
+        - self.lr_scheduler = None because we do poly_lr
+        - deep supervision = True
+        - i am sure I forgot something here
+
+        Known issue: forgot to set neg_slope=0 in InitWeights_He; should not make a difference though
+        :return:
+        """
+        if self.threeD:
+            conv_op = nn.Conv3d
+            dropout_op = nn.Dropout3d
+            norm_op = nn.InstanceNorm3d
+
+        else:
+            conv_op = nn.Conv2d
+            dropout_op = nn.Dropout2d
+            norm_op = nn.InstanceNorm2d
+
+        norm_op_kwargs = {"eps": 1e-5, "affine": True}
+        dropout_op_kwargs = {"p": 0, "inplace": True}
+        net_nonlin = nn.LeakyReLU
+        net_nonlin_kwargs = {"negative_slope": 1e-2, "inplace": True}
+
+        # NJ all args as for GenericUNet. But convolutional_pooling and convolutional_upsampling set to False!!
+        self.network = SegNetNPool(
+            self.num_input_channels,
+            self.base_num_features,
+            self.num_classes,
+            len(self.net_num_pool_op_kernel_sizes)
+            if self.grid_num_pool is None
+            else self.grid_num_pool,
+            num_conv_per_stage=self.conv_per_stage
+            if self.grid_num_conv_per_stage is None
+            else self.grid_num_conv_per_stage,
+            feat_map_mul_on_downscale=2,
+            conv_op=conv_op,
+            norm_op=norm_op,
+            norm_op_kwargs=norm_op_kwargs,
+            dropout_op=dropout_op,
+            dropout_op_kwargs=dropout_op_kwargs,
+            nonlin=net_nonlin,
+            nonlin_kwargs=net_nonlin_kwargs,
+            deep_supervision=True,
+            dropout_in_localization=False,
+            final_nonlin=lambda x: x,
+            weightInitializer=InitWeights_He(1e-2),
+            upscale_logits=False,
+            convolutional_pooling=False,
+            convolutional_upsampling=False,
+            unpool_on_layers=[4],  # NEW PARAMETER!!!
+        )
+        if torch.cuda.is_available():
+            self.network.cuda()
+
+        # NJ Set inference_apply_nonlin as in nnUNetTrainerV2BraTSRegions
+        self.network.inference_apply_nonlin = nn.Sigmoid()
+
+
+class nnUNetTrainerSegNetPool43(nnUNetTrainerV2BraTSRegions):
+    """
+    SegNet trainer class. Implements training procedure using SegNet instead of generic UNet.
+
+    Train model with:
+    nnUNet_train 3d_fullres nnUNetTrainerV2BraTSSegnet Task500_Brats21 4 --npz
+    """
+
+    def __init__(
+        self,
+        plans_file,
+        fold,
+        output_folder,
+        dataset_directory,
+        batch_dice,
+        stage,
+        unpack_data,
+        deterministic,
+        fp16,
+        grid_num_conv_per_stage: Optional[int] = None,  # Grid: Number of convolutions
+        grid_num_pool: Optional[int] = None,  # Grid: Number of poolings
+    ):
+        super().__init__(
+            plans_file,
+            fold,
+            output_folder=output_folder,
+            dataset_directory=dataset_directory,
+            batch_dice=batch_dice,
+            stage=stage,
+            unpack_data=unpack_data,
+            deterministic=deterministic,
+            fp16=fp16,
+        )
+        self.grid_num_conv_per_stage = grid_num_conv_per_stage
+        self.grid_num_pool = grid_num_pool
+
+    def initialize_network(self):
+        """
+        - momentum 0.99
+        - SGD instead of Adam
+        - self.lr_scheduler = None because we do poly_lr
+        - deep supervision = True
+        - i am sure I forgot something here
+
+        Known issue: forgot to set neg_slope=0 in InitWeights_He; should not make a difference though
+        :return:
+        """
+        if self.threeD:
+            conv_op = nn.Conv3d
+            dropout_op = nn.Dropout3d
+            norm_op = nn.InstanceNorm3d
+
+        else:
+            conv_op = nn.Conv2d
+            dropout_op = nn.Dropout2d
+            norm_op = nn.InstanceNorm2d
+
+        norm_op_kwargs = {"eps": 1e-5, "affine": True}
+        dropout_op_kwargs = {"p": 0, "inplace": True}
+        net_nonlin = nn.LeakyReLU
+        net_nonlin_kwargs = {"negative_slope": 1e-2, "inplace": True}
+
+        # NJ all args as for GenericUNet. But convolutional_pooling and convolutional_upsampling set to False!!
+        self.network = SegNetNPool(
+            self.num_input_channels,
+            self.base_num_features,
+            self.num_classes,
+            len(self.net_num_pool_op_kernel_sizes)
+            if self.grid_num_pool is None
+            else self.grid_num_pool,
+            num_conv_per_stage=self.conv_per_stage
+            if self.grid_num_conv_per_stage is None
+            else self.grid_num_conv_per_stage,
+            feat_map_mul_on_downscale=2,
+            conv_op=conv_op,
+            norm_op=norm_op,
+            norm_op_kwargs=norm_op_kwargs,
+            dropout_op=dropout_op,
+            dropout_op_kwargs=dropout_op_kwargs,
+            nonlin=net_nonlin,
+            nonlin_kwargs=net_nonlin_kwargs,
+            deep_supervision=True,
+            dropout_in_localization=False,
+            final_nonlin=lambda x: x,
+            weightInitializer=InitWeights_He(1e-2),
+            upscale_logits=False,
+            convolutional_pooling=False,
+            convolutional_upsampling=False,
+            unpool_on_layers=[4, 3],  # NEW PARAMETER!!!
+        )
+        if torch.cuda.is_available():
+            self.network.cuda()
+
+        # NJ Set inference_apply_nonlin as in nnUNetTrainerV2BraTSRegions
+        self.network.inference_apply_nonlin = nn.Sigmoid()
+
+
+class nnUNetTrainerSegNetPool432(nnUNetTrainerV2BraTSRegions):
+    """
+    SegNet trainer class. Implements training procedure using SegNet instead of generic UNet.
+
+    Train model with:
+    nnUNet_train 3d_fullres nnUNetTrainerV2BraTSSegnet Task500_Brats21 4 --npz
+    """
+
+    def __init__(
+        self,
+        plans_file,
+        fold,
+        output_folder,
+        dataset_directory,
+        batch_dice,
+        stage,
+        unpack_data,
+        deterministic,
+        fp16,
+        grid_num_conv_per_stage: Optional[int] = None,  # Grid: Number of convolutions
+        grid_num_pool: Optional[int] = None,  # Grid: Number of poolings
+    ):
+        super().__init__(
+            plans_file,
+            fold,
+            output_folder=output_folder,
+            dataset_directory=dataset_directory,
+            batch_dice=batch_dice,
+            stage=stage,
+            unpack_data=unpack_data,
+            deterministic=deterministic,
+            fp16=fp16,
+        )
+        self.grid_num_conv_per_stage = grid_num_conv_per_stage
+        self.grid_num_pool = grid_num_pool
+
+    def initialize_network(self):
+        """
+        - momentum 0.99
+        - SGD instead of Adam
+        - self.lr_scheduler = None because we do poly_lr
+        - deep supervision = True
+        - i am sure I forgot something here
+
+        Known issue: forgot to set neg_slope=0 in InitWeights_He; should not make a difference though
+        :return:
+        """
+        if self.threeD:
+            conv_op = nn.Conv3d
+            dropout_op = nn.Dropout3d
+            norm_op = nn.InstanceNorm3d
+
+        else:
+            conv_op = nn.Conv2d
+            dropout_op = nn.Dropout2d
+            norm_op = nn.InstanceNorm2d
+
+        norm_op_kwargs = {"eps": 1e-5, "affine": True}
+        dropout_op_kwargs = {"p": 0, "inplace": True}
+        net_nonlin = nn.LeakyReLU
+        net_nonlin_kwargs = {"negative_slope": 1e-2, "inplace": True}
+
+        # NJ all args as for GenericUNet. But convolutional_pooling and convolutional_upsampling set to False!!
+        self.network = SegNetNPool(
+            self.num_input_channels,
+            self.base_num_features,
+            self.num_classes,
+            len(self.net_num_pool_op_kernel_sizes)
+            if self.grid_num_pool is None
+            else self.grid_num_pool,
+            num_conv_per_stage=self.conv_per_stage
+            if self.grid_num_conv_per_stage is None
+            else self.grid_num_conv_per_stage,
+            feat_map_mul_on_downscale=2,
+            conv_op=conv_op,
+            norm_op=norm_op,
+            norm_op_kwargs=norm_op_kwargs,
+            dropout_op=dropout_op,
+            dropout_op_kwargs=dropout_op_kwargs,
+            nonlin=net_nonlin,
+            nonlin_kwargs=net_nonlin_kwargs,
+            deep_supervision=True,
+            dropout_in_localization=False,
+            final_nonlin=lambda x: x,
+            weightInitializer=InitWeights_He(1e-2),
+            upscale_logits=False,
+            convolutional_pooling=False,
+            convolutional_upsampling=False,
+            unpool_on_layers=[4, 3, 2],  # NEW PARAMETER!!!
+        )
+        if torch.cuda.is_available():
+            self.network.cuda()
+
+        # NJ Set inference_apply_nonlin as in nnUNetTrainerV2BraTSRegions
+        self.network.inference_apply_nonlin = nn.Sigmoid()
